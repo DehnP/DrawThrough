@@ -86,9 +86,7 @@ object TraceImageProcessor {
         val gain = 0.6f + clamped * 2.4f
         val noiseFloor = ((1f - clamped) * 42f + 12f).toInt()
 
-        val out = IntArray(width * height)
-        val paperColor = 0xFFFAF8F4.toInt()
-        out.fill(paperColor)
+        val out = IntArray(width * height) // 0 = fully transparent so live camera shows through
 
         for (y in 1 until height - 1) {
             val rowAbove = (y - 1) * width
@@ -109,13 +107,9 @@ object TraceImageProcessor {
                 val mag = (abs(gx) + abs(gy)) shr 2
 
                 if (mag > noiseFloor) {
-                    val inkIntensity = min(255, ((mag - noiseFloor) * gain).toInt())
-                    // Blend from warm paper (250, 248, 244) toward charcoal ink (24, 23, 21)
-                    val inv = 255 - inkIntensity
-                    val r = (250 * inv + 24 * inkIntensity) / 255
-                    val g = (248 * inv + 23 * inkIntensity) / 255
-                    val b = (244 * inv + 21 * inkIntensity) / 255
-                    out[row + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                    val alpha = min(255, ((mag - noiseFloor) * gain).toInt())
+                    // Deep charcoal ink (#181715) with edge-proportional alpha
+                    out[row + x] = (alpha shl 24) or 0x00181715
                 }
             }
         }

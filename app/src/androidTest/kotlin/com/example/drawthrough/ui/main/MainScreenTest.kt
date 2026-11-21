@@ -19,12 +19,15 @@ class MainScreenTest {
             DrawThroughTheme {
                 DrawThroughContent(
                     uiState = MainScreenUiState(),
+                    hasCameraPermission = true,
+                    onRequestCameraPermission = {},
                     onPickPhoto = {},
-                    onBrightnessChange = {},
-                    onSelectBrightness = {},
+                    onOpacityChange = {},
+                    onSelectOpacity = {},
                     onOutlineClick = {},
                     onOutlineStrengthChange = {},
                     onToggleGrid = {},
+                    onToggleTorch = {},
                     onSetLocked = {},
                     onTransform = { _, _, _, _ -> },
                     onResetTransform = {},
@@ -36,7 +39,7 @@ class MainScreenTest {
     @Test
     fun controls_areDisplayed() {
         composeTestRule.onNodeWithText("DrawThrough").assertExists()
-        composeTestRule.onNodeWithText("Brightness 100%").assertExists()
+        composeTestRule.onNodeWithText("Opacity 50%").assertExists()
         composeTestRule.onNodeWithText("Lock").assertExists()
     }
 }

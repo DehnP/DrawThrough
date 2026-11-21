@@ -212,4 +212,93 @@ object DrawThroughIcons {
             }
         }.build()
     }
+
+    val Opacity: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Opacity",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            // Water drop with half-fill representing translucency
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(12f, 3.2f)
+                lineTo(6.6f, 10.6f)
+                arcToRelative(6.5f, 6.5f, 0f, true, false, 10.8f, 0f)
+                close()
+            }
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(5.8f, 14.2f)
+                horizontalLineTo(18.2f)
+                arcToRelative(6.2f, 6.2f, 0f, false, true, -12.4f, 0f)
+                close()
+            }
+        }.build()
+    }
+
+    val Torch: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Torch",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(13.2f, 2.8f)
+                lineTo(5.5f, 13.2f)
+                horizontalLineTo(11.6f)
+                lineTo(10.8f, 21.2f)
+                lineTo(18.5f, 10.8f)
+                horizontalLineTo(12.4f)
+                close()
+            }
+        }.build()
+    }
+
+    val Camera: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Camera",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(4f, 7.5f)
+                horizontalLineTo(7.2f)
+                lineTo(8.8f, 5f)
+                horizontalLineTo(15.2f)
+                lineTo(16.8f, 7.5f)
+                horizontalLineTo(20f)
+                arcToRelative(2f, 2f, 0f, false, true, 2f, 2f)
+                verticalLineTo(17.5f)
+                arcToRelative(2f, 2f, 0f, false, true, -2f, 2f)
+                horizontalLineTo(4f)
+                arcToRelative(2f, 2f, 0f, false, true, -2f, -2f)
+                verticalLineTo(9.5f)
+                arcToRelative(2f, 2f, 0f, false, true, 2f, -2f)
+                close()
+                moveTo(12f, 10.2f)
+                arcToRelative(3.3f, 3.3f, 0f, true, true, 0f, 6.6f)
+                arcToRelative(3.3f, 3.3f, 0f, true, true, 0f, -6.6f)
+            }
+        }.build()
+    }
 }

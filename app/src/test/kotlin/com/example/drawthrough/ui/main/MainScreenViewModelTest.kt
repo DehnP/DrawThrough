@@ -13,21 +13,31 @@ class MainScreenViewModelTest {
         val state = viewModel.uiState.value
 
         assertFalse(state.hasImage)
-        assertEquals(1.0f, state.brightness)
+        assertEquals(0.50f, state.opacity)
         assertFalse(state.outlineEnabled)
-        assertEquals(ActiveTool.BRIGHTNESS, state.activeTool)
-        assertTrue(state.showGrid)
+        assertEquals(ActiveTool.OPACITY, state.activeTool)
+        assertFalse(state.showGrid)
+        assertFalse(state.isTorchEnabled)
         assertFalse(state.isLocked)
     }
 
     @Test
-    fun brightnessChange_clampsWithinRange() {
+    fun opacityChange_clampsWithinRange() {
         val viewModel = MainScreenViewModel()
-        viewModel.onBrightnessChange(0.01f)
-        assertEquals(0.1f, viewModel.uiState.value.brightness)
+        viewModel.onOpacityChange(0.0f)
+        assertEquals(0.05f, viewModel.uiState.value.opacity)
 
-        viewModel.onBrightnessChange(1.5f)
-        assertEquals(1.0f, viewModel.uiState.value.brightness)
+        viewModel.onOpacityChange(1.5f)
+        assertEquals(1.0f, viewModel.uiState.value.opacity)
+    }
+
+    @Test
+    fun torchToggle_flipsTorchState() {
+        val viewModel = MainScreenViewModel()
+        assertFalse(viewModel.uiState.value.isTorchEnabled)
+
+        viewModel.onToggleTorch()
+        assertTrue(viewModel.uiState.value.isTorchEnabled)
     }
 
     @Test

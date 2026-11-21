@@ -1,8 +1,10 @@
 package com.example.drawthrough.ui.main
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.PackageManager
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -20,11 +22,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,7 +63,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
@@ -81,10 +80,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.drawthrough.R
+import com.example.drawthrough.ui.components.CameraFeedLayer
 import com.example.drawthrough.ui.components.DrawThroughIcons
 import com.example.drawthrough.ui.theme.DrawThroughTheme
 import com.example.drawthrough.ui.theme.OnTerracotta
@@ -108,6 +108,25 @@ fun MainScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        hasCameraPermission = granted
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
@@ -122,51 +141,48 @@ fun MainScreen(
         )
     }
 
-    // Keep screen awake & apply lightbox brightness to the Activity window
-    LightboxWindowEffect(brightness = uiState.brightness)
+    // Keep screen awake while drawing over the camera feed
+    KeepScreenAwakeEffect()
 
-    // Prevent accidental back swipe while tracing with paper on screen
+    // Prevent accidental back swipe while locked
     BackHandler(enabled = uiState.isLocked) {
-        // Intentionally ignored while locked; user unlocks via hold-to-unlock pill.
+        // Intentionally ignored while locked; unlock via hold-to-unlock pill.
     }
 
     DrawThroughContent(
         uiState = uiState,
+        hasCameraPermission = hasCameraPermission,
+        onRequestCameraPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
         onPickPhoto = launchPicker,
-        onBrightnessChange = viewModel::onBrightnessChange,
-        onSelectBrightness = viewModel::onSelectBrightnessTool,
+        onOpacityChange = viewModel::onOpacityChange,
+        onSelectOpacity = viewModel::onSelectOpacityTool,
         onOutlineClick = viewModel::onOutlineTabClick,
         onOutlineStrengthChange = viewModel::onOutlineStrengthChange,
         onToggleGrid = viewModel::onToggleGrid,
+        onToggleTorch = viewModel::onToggleTorch,
         onSetLocked = viewModel::onSetLocked,
         onTransform = viewModel::onTransform,
         onResetTransform = viewModel::onResetTransform,
+        cameraContent = {
+            CameraFeedLayer(
+                isTorchEnabled = uiState.isTorchEnabled,
+                modifier = Modifier.fillMaxSize(),
+            )
+        },
         modifier = modifier,
     )
 }
 
 @Composable
-private fun LightboxWindowEffect(brightness: Float) {
+private fun KeepScreenAwakeEffect() {
     val view = LocalView.current
     val activity = remember(view) { view.context.findActivity() }
-
-    LaunchedEffect(activity, brightness) {
-        val window = activity?.window ?: return@LaunchedEffect
-        val params = window.attributes
-        params.screenBrightness = brightness.coerceIn(0.1f, 1.0f)
-        window.attributes = params
-    }
 
     DisposableEffect(activity) {
         val window = activity?.window
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose {
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            window?.let { w ->
-                val params = w.attributes
-                params.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-                w.attributes = params
-            }
         }
     }
 }
@@ -180,16 +196,20 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 @Composable
 internal fun DrawThroughContent(
     uiState: MainScreenUiState,
+    hasCameraPermission: Boolean,
+    onRequestCameraPermission: () -> Unit,
     onPickPhoto: () -> Unit,
-    onBrightnessChange: (Float) -> Unit,
-    onSelectBrightness: () -> Unit,
+    onOpacityChange: (Float) -> Unit,
+    onSelectOpacity: () -> Unit,
     onOutlineClick: () -> Unit,
     onOutlineStrengthChange: (Float) -> Unit,
     onToggleGrid: () -> Unit,
+    onToggleTorch: () -> Unit,
     onSetLocked: (Boolean) -> Unit,
     onTransform: (zoom: Float, panX: Float, panY: Float, rotation: Float) -> Unit,
     onResetTransform: () -> Unit,
     modifier: Modifier = Modifier,
+    cameraContent: (@Composable () -> Unit)? = null,
     previewOverlay: (@Composable () -> Unit)? = null,
 ) {
     Box(
@@ -197,21 +217,28 @@ internal fun DrawThroughContent(
             .fillMaxSize()
             .background(StudioCanvas),
     ) {
-        // 1. Subtle dotted studio grid
+        // 1. Live rear camera feed showing the paper underneath
+        if (hasCameraPermission && cameraContent != null) {
+            cameraContent()
+        }
+
+        // 2. Optional subtle dotted alignment grid
         if (uiState.showGrid) {
             DottedTracingGrid(modifier = Modifier.fillMaxSize())
         }
 
-        // 2. Transformable tracing canvas (or empty state)
-        TracingCanvasArea(
+        // 3. Translucent transformable image overlay (or permission / empty prompt)
+        TracingOverlayArea(
             uiState = uiState,
+            hasCameraPermission = hasCameraPermission,
+            onRequestCameraPermission = onRequestCameraPermission,
             onPickPhoto = onPickPhoto,
             onTransform = onTransform,
             previewOverlay = previewOverlay,
             modifier = Modifier.fillMaxSize(),
         )
 
-        // 3. Top bar (fades away cleanly when locked)
+        // 4. Top bar (fades away cleanly when locked)
         AnimatedVisibility(
             visible = !uiState.isLocked,
             enter = fadeIn() + slideInVertically { -it },
@@ -221,7 +248,10 @@ internal fun DrawThroughContent(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 StudioTopBar(
                     showGrid = uiState.showGrid,
+                    isTorchEnabled = uiState.isTorchEnabled,
+                    showTorch = hasCameraPermission,
                     onToggleGrid = onToggleGrid,
+                    onToggleTorch = onToggleTorch,
                     onPickPhoto = onPickPhoto,
                 )
                 if (uiState.isTransformed && uiState.hasImage) {
@@ -231,7 +261,7 @@ internal fun DrawThroughContent(
             }
         }
 
-        // 4. Floating contextual slider + bottom pill dock (fades away when locked)
+        // 5. Floating contextual slider + bottom pill dock (fades away when locked)
         AnimatedVisibility(
             visible = !uiState.isLocked,
             enter = fadeIn() + slideInVertically { it },
@@ -247,21 +277,21 @@ internal fun DrawThroughContent(
             ) {
                 ContextualSliderPill(
                     uiState = uiState,
-                    onBrightnessChange = onBrightnessChange,
+                    onOpacityChange = onOpacityChange,
                     onOutlineStrengthChange = onOutlineStrengthChange,
                 )
                 StudioBottomDock(
                     activeTool = uiState.activeTool,
                     outlineEnabled = uiState.outlineEnabled,
                     onPhotoClick = onPickPhoto,
-                    onBrightnessClick = onSelectBrightness,
+                    onOpacityClick = onSelectOpacity,
                     onOutlineClick = onOutlineClick,
                     onLockClick = { onSetLocked(true) },
                 )
             }
         }
 
-        // 5. Locked-mode unobtrusive "Hold to unlock" pill
+        // 6. Locked-mode unobtrusive "Hold to unlock" pill
         AnimatedVisibility(
             visible = uiState.isLocked,
             enter = fadeIn(),
@@ -274,7 +304,7 @@ internal fun DrawThroughContent(
             HoldToUnlockPill(onUnlocked = { onSetLocked(false) })
         }
 
-        // 6. Loading / error feedback
+        // 7. Loading / error feedback
         if (uiState.isLoadingImage || uiState.isProcessingOutline) {
             Surface(
                 shape = CircleShape,
@@ -320,11 +350,12 @@ private fun DottedTracingGrid(modifier: Modifier = Modifier) {
         val spacing = 56.dp.toPx()
         val dash = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 6.dp.toPx()), 0f)
         val strokeWidth = 1.dp.toPx()
+        val gridColor = StudioGridLine.copy(alpha = 0.75f)
 
         var x = spacing
         while (x < size.width) {
             drawLine(
-                color = StudioGridLine,
+                color = gridColor,
                 start = Offset(x, 0f),
                 end = Offset(x, size.height),
                 strokeWidth = strokeWidth,
@@ -336,7 +367,7 @@ private fun DottedTracingGrid(modifier: Modifier = Modifier) {
         var y = spacing
         while (y < size.height) {
             drawLine(
-                color = StudioGridLine,
+                color = gridColor,
                 start = Offset(0f, y),
                 end = Offset(size.width, y),
                 strokeWidth = strokeWidth,
@@ -348,8 +379,10 @@ private fun DottedTracingGrid(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun TracingCanvasArea(
+private fun TracingOverlayArea(
     uiState: MainScreenUiState,
+    hasCameraPermission: Boolean,
+    onRequestCameraPermission: () -> Unit,
     onPickPhoto: () -> Unit,
     onTransform: (zoom: Float, panX: Float, panY: Float, rotation: Float) -> Unit,
     previewOverlay: (@Composable () -> Unit)?,
@@ -371,12 +404,16 @@ private fun TracingCanvasArea(
     ) {
         val bitmap = uiState.displayedBitmap
         when {
+            !hasCameraPermission -> {
+                CameraPermissionCard(onRequestCameraPermission = onRequestCameraPermission)
+            }
             bitmap != null -> {
                 val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
                 Image(
                     bitmap = imageBitmap,
-                    contentDescription = "Tracing image",
+                    contentDescription = "Translucent tracing overlay",
                     contentScale = ContentScale.Fit,
+                    alpha = uiState.opacity,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(24.dp)
@@ -390,70 +427,143 @@ private fun TracingCanvasArea(
                 )
             }
             previewOverlay != null -> {
-                previewOverlay()
+                Box(
+                    modifier = Modifier.graphicsLayer { alpha = uiState.opacity },
+                ) {
+                    previewOverlay()
+                }
             }
             else -> {
-                EmptyStudioState(onPickPhoto = onPickPhoto)
+                PickPhotoPromptCard(onPickPhoto = onPickPhoto)
             }
         }
     }
 }
 
 @Composable
-private fun EmptyStudioState(onPickPhoto: () -> Unit) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+private fun CameraPermissionCard(onRequestCameraPermission: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = StudioPillSurface.copy(alpha = 0.96f),
+        border = BorderStroke(1.dp, StudioBorder),
+        shadowElevation = 6.dp,
+        modifier = Modifier
+            .padding(horizontal = 32.dp)
+            .padding(bottom = 64.dp),
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(TerracottaSoft),
+            ) {
+                Icon(
+                    imageVector = DrawThroughIcons.Camera,
+                    contentDescription = null,
+                    tint = Terracotta,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+            Text(
+                text = "Point your camera at paper",
+                style = MaterialTheme.typography.titleMedium,
+                color = StudioInk,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = "DrawThrough overlays a translucent image onto your live camera feed so you can trace it onto paper underneath.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = StudioInkMuted,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Button(
+                onClick = onRequestCameraPermission,
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Terracotta,
+                    contentColor = OnTerracotta,
+                ),
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
+            ) {
+                Text(
+                    text = "Enable Camera",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PickPhotoPromptCard(onPickPhoto: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = StudioPillSurface.copy(alpha = 0.90f),
+        border = BorderStroke(1.dp, StudioBorder.copy(alpha = 0.8f)),
+        shadowElevation = 6.dp,
         modifier = Modifier
             .padding(horizontal = 36.dp)
             .padding(bottom = 64.dp),
     ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(TerracottaSoft.copy(alpha = 0.7f)),
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 24.dp),
         ) {
-            Icon(
-                imageVector = DrawThroughIcons.Photo,
-                contentDescription = null,
-                tint = Terracotta,
-                modifier = Modifier.size(32.dp),
-            )
-        }
-        Text(
-            text = "Place paper over your screen to trace",
-            style = MaterialTheme.typography.titleMedium,
-            color = StudioInk,
-            textAlign = TextAlign.Center,
-        )
-        Text(
-            text = "Pick any photo, pinch to resize or rotate, and lock the screen before drawing.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = StudioInkMuted,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Button(
-            onClick = onPickPhoto,
-            shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Terracotta,
-                contentColor = OnTerracotta,
-            ),
-            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
-        ) {
-            Icon(
-                imageVector = DrawThroughIcons.Photo,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(TerracottaSoft),
+            ) {
+                Icon(
+                    imageVector = DrawThroughIcons.Photo,
+                    contentDescription = null,
+                    tint = Terracotta,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
             Text(
-                text = "Pick Photo",
-                style = MaterialTheme.typography.labelLarge,
+                text = "Pick an image to overlay",
+                style = MaterialTheme.typography.titleMedium,
+                color = StudioInk,
+                textAlign = TextAlign.Center,
             )
+            Text(
+                text = "Prop your phone above your paper, adjust opacity, and lock the overlay while you draw.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = StudioInkMuted,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Button(
+                onClick = onPickPhoto,
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Terracotta,
+                    contentColor = OnTerracotta,
+                ),
+                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 10.dp),
+            ) {
+                Icon(
+                    imageVector = DrawThroughIcons.Photo,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Pick Photo",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
         }
     }
 }
@@ -461,11 +571,14 @@ private fun EmptyStudioState(onPickPhoto: () -> Unit) {
 @Composable
 private fun StudioTopBar(
     showGrid: Boolean,
+    isTorchEnabled: Boolean,
+    showTorch: Boolean,
     onToggleGrid: () -> Unit,
+    onToggleTorch: () -> Unit,
     onPickPhoto: () -> Unit,
 ) {
     Surface(
-        color = StudioHeader,
+        color = StudioHeader.copy(alpha = 0.90f),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
@@ -484,8 +597,22 @@ private fun StudioTopBar(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                if (showTorch) {
+                    IconButton(
+                        onClick = onToggleTorch,
+                        modifier = Modifier.size(38.dp),
+                    ) {
+                        Icon(
+                            imageVector = DrawThroughIcons.Torch,
+                            contentDescription = if (isTorchEnabled) "Turn off flashlight" else "Turn on flashlight",
+                            tint = if (isTorchEnabled) Terracotta else StudioInkMuted,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+
                 IconButton(
                     onClick = onToggleGrid,
                     modifier = Modifier.size(38.dp),
@@ -497,6 +624,8 @@ private fun StudioTopBar(
                         modifier = Modifier.size(20.dp),
                     )
                 }
+
+                Spacer(modifier = Modifier.width(2.dp))
 
                 OutlinedButton(
                     onClick = onPickPhoto,
@@ -530,7 +659,7 @@ private fun ResetTransformChip(onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = CircleShape,
-        color = StudioPillSurface,
+        color = StudioPillSurface.copy(alpha = 0.94f),
         border = BorderStroke(1.dp, StudioBorder),
         shadowElevation = 2.dp,
     ) {
@@ -557,15 +686,15 @@ private fun ResetTransformChip(onClick: () -> Unit) {
 @Composable
 private fun ContextualSliderPill(
     uiState: MainScreenUiState,
-    onBrightnessChange: (Float) -> Unit,
+    onOpacityChange: (Float) -> Unit,
     onOutlineStrengthChange: (Float) -> Unit,
 ) {
-    val isBrightness = uiState.activeTool == ActiveTool.BRIGHTNESS
-    val icon = if (isBrightness) DrawThroughIcons.Sun else DrawThroughIcons.Outline
-    val value = if (isBrightness) uiState.brightness else uiState.outlineStrength
+    val isOpacity = uiState.activeTool == ActiveTool.OPACITY
+    val icon = if (isOpacity) DrawThroughIcons.Opacity else DrawThroughIcons.Outline
+    val value = if (isOpacity) uiState.opacity else uiState.outlineStrength
     val percent = (value * 100f).roundToInt()
-    val label = if (isBrightness) {
-        "Brightness $percent%"
+    val label = if (isOpacity) {
+        "Opacity $percent%"
     } else if (uiState.outlineEnabled) {
         "Outline $percent%"
     } else {
@@ -574,7 +703,7 @@ private fun ContextualSliderPill(
 
     Surface(
         shape = CircleShape,
-        color = StudioPillSurface,
+        color = StudioPillSurface.copy(alpha = 0.94f),
         border = BorderStroke(1.dp, StudioBorder.copy(alpha = 0.65f)),
         shadowElevation = 6.dp,
         modifier = Modifier.fillMaxWidth(0.88f),
@@ -593,9 +722,9 @@ private fun ContextualSliderPill(
             Slider(
                 value = value,
                 onValueChange = { next ->
-                    if (isBrightness) onBrightnessChange(next) else onOutlineStrengthChange(next)
+                    if (isOpacity) onOpacityChange(next) else onOutlineStrengthChange(next)
                 },
-                valueRange = 0.1f..1.0f,
+                valueRange = if (isOpacity) 0.05f..1.0f else 0.1f..1.0f,
                 colors = SliderDefaults.colors(
                     thumbColor = Terracotta,
                     activeTrackColor = Terracotta,
@@ -618,13 +747,13 @@ private fun StudioBottomDock(
     activeTool: ActiveTool,
     outlineEnabled: Boolean,
     onPhotoClick: () -> Unit,
-    onBrightnessClick: () -> Unit,
+    onOpacityClick: () -> Unit,
     onOutlineClick: () -> Unit,
     onLockClick: () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(32.dp),
-        color = StudioPillSurface,
+        color = StudioPillSurface.copy(alpha = 0.95f),
         border = BorderStroke(1.dp, StudioBorder.copy(alpha = 0.65f)),
         shadowElevation = 8.dp,
         modifier = Modifier.fillMaxWidth(),
@@ -644,11 +773,11 @@ private fun StudioBottomDock(
                 modifier = Modifier.weight(1f),
             )
             DockActionItem(
-                icon = DrawThroughIcons.Sun,
-                label = "Brightness",
-                highlighted = activeTool == ActiveTool.BRIGHTNESS,
+                icon = DrawThroughIcons.Opacity,
+                label = "Opacity",
+                highlighted = activeTool == ActiveTool.OPACITY,
                 softCircle = false,
-                onClick = onBrightnessClick,
+                onClick = onOpacityClick,
                 modifier = Modifier.weight(1f),
             )
             DockActionItem(
@@ -660,7 +789,6 @@ private fun StudioBottomDock(
                 modifier = Modifier.weight(1f),
             )
 
-            // Prominent terracotta Lock pill
             Surface(
                 onClick = onLockClick,
                 shape = RoundedCornerShape(24.dp),
@@ -676,7 +804,7 @@ private fun StudioBottomDock(
                 ) {
                     Icon(
                         imageVector = DrawThroughIcons.Lock,
-                        contentDescription = "Lock screen for tracing",
+                        contentDescription = "Lock overlay while tracing",
                         tint = OnTerracotta,
                         modifier = Modifier.size(22.dp),
                     )
@@ -747,7 +875,7 @@ private fun HoldToUnlockPill(onUnlocked: () -> Unit) {
 
     Surface(
         shape = CircleShape,
-        color = StudioPillSurface.copy(alpha = 0.85f),
+        color = StudioPillSurface.copy(alpha = 0.88f),
         border = BorderStroke(1.dp, StudioBorder),
         shadowElevation = 4.dp,
         modifier = Modifier.pointerInput(Unit) {
@@ -810,47 +938,38 @@ private fun HoldToUnlockPill(onUnlocked: () -> Unit) {
 
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
-private fun DrawThroughEmptyPreview() {
-    DrawThroughTheme {
-        DrawThroughContent(
-            uiState = MainScreenUiState(),
-            onPickPhoto = {},
-            onBrightnessChange = {},
-            onSelectBrightness = {},
-            onOutlineClick = {},
-            onOutlineStrengthChange = {},
-            onToggleGrid = {},
-            onSetLocked = {},
-            onTransform = { _, _, _, _ -> },
-            onResetTransform = {},
-        )
-    }
-}
-
-@Preview(showBackground = true, showSystemUi = true)
-@Composable
 private fun DrawThroughActiveStudioPreview() {
     DrawThroughTheme {
         DrawThroughContent(
             uiState = MainScreenUiState(
-                brightness = 1.0f,
+                opacity = 0.55f,
                 outlineEnabled = true,
-                activeTool = ActiveTool.BRIGHTNESS,
+                activeTool = ActiveTool.OPACITY,
                 showGrid = true,
             ),
+            hasCameraPermission = true,
+            onRequestCameraPermission = {},
             onPickPhoto = {},
-            onBrightnessChange = {},
-            onSelectBrightness = {},
+            onOpacityChange = {},
+            onSelectOpacity = {},
             onOutlineClick = {},
             onOutlineStrengthChange = {},
             onToggleGrid = {},
+            onToggleTorch = {},
             onSetLocked = {},
             onTransform = { _, _, _, _ -> },
             onResetTransform = {},
+            cameraContent = {
+                // Simulated sunlit sketchbook paper seen through rear camera
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFFEDE8DF)),
+                )
+            },
             previewOverlay = {
-                // Clean sample botanical sketch for visual preview
                 Canvas(modifier = Modifier.size(240.dp)) {
-                    val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                    val stroke = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
                     drawCircle(
                         color = StudioInk,
                         radius = size.minDimension * 0.28f,
@@ -861,10 +980,39 @@ private fun DrawThroughActiveStudioPreview() {
                         color = StudioInk,
                         start = Offset(size.width * 0.5f, size.height * 0.17f),
                         end = Offset(size.width * 0.5f, size.height * 0.85f),
-                        strokeWidth = 2.dp.toPx(),
+                        strokeWidth = 2.5.dp.toPx(),
                         cap = StrokeCap.Round,
                     )
                 }
+            },
+        )
+    }
+}
+
+@Preview(showBackground = true, showSystemUi = true)
+@Composable
+private fun DrawThroughEmptyPreview() {
+    DrawThroughTheme {
+        DrawThroughContent(
+            uiState = MainScreenUiState(),
+            hasCameraPermission = true,
+            onRequestCameraPermission = {},
+            onPickPhoto = {},
+            onOpacityChange = {},
+            onSelectOpacity = {},
+            onOutlineClick = {},
+            onOutlineStrengthChange = {},
+            onToggleGrid = {},
+            onToggleTorch = {},
+            onSetLocked = {},
+            onTransform = { _, _, _, _ -> },
+            onResetTransform = {},
+            cameraContent = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFFE9E3D8)),
+                )
             },
         )
     }
@@ -876,24 +1024,35 @@ private fun DrawThroughLockedPreview() {
     DrawThroughTheme {
         DrawThroughContent(
             uiState = MainScreenUiState(
+                opacity = 0.5f,
                 isLocked = true,
-                showGrid = true,
+                showGrid = false,
             ),
+            hasCameraPermission = true,
+            onRequestCameraPermission = {},
             onPickPhoto = {},
-            onBrightnessChange = {},
-            onSelectBrightness = {},
+            onOpacityChange = {},
+            onSelectOpacity = {},
             onOutlineClick = {},
             onOutlineStrengthChange = {},
             onToggleGrid = {},
+            onToggleTorch = {},
             onSetLocked = {},
             onTransform = { _, _, _, _ -> },
             onResetTransform = {},
+            cameraContent = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFFEDE8DF)),
+                )
+            },
             previewOverlay = {
                 Canvas(modifier = Modifier.size(240.dp)) {
                     drawCircle(
                         color = StudioInk,
                         radius = size.minDimension * 0.28f,
-                        style = Stroke(width = 2.dp.toPx()),
+                        style = Stroke(width = 2.5.dp.toPx()),
                     )
                 }
             },

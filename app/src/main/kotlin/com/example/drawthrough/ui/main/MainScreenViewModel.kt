@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 enum class ActiveTool {
-    BRIGHTNESS,
+    OPACITY,
     OUTLINE,
 }
 
@@ -25,11 +25,12 @@ data class MainScreenUiState(
     val isLoadingImage: Boolean = false,
     val isProcessingOutline: Boolean = false,
     val errorMessage: String? = null,
-    val brightness: Float = 1.0f,
+    val opacity: Float = 0.50f,
     val outlineEnabled: Boolean = false,
     val outlineStrength: Float = 0.55f,
-    val activeTool: ActiveTool = ActiveTool.BRIGHTNESS,
-    val showGrid: Boolean = true,
+    val activeTool: ActiveTool = ActiveTool.OPACITY,
+    val showGrid: Boolean = false,
+    val isTorchEnabled: Boolean = false,
     val isLocked: Boolean = false,
     val scale: Float = 1f,
     val rotation: Float = 0f,
@@ -86,17 +87,17 @@ class MainScreenViewModel : ViewModel() {
         }
     }
 
-    fun onBrightnessChange(value: Float) {
+    fun onOpacityChange(value: Float) {
         _uiState.update {
             it.copy(
-                brightness = value.coerceIn(0.1f, 1.0f),
-                activeTool = ActiveTool.BRIGHTNESS,
+                opacity = value.coerceIn(0.05f, 1.0f),
+                activeTool = ActiveTool.OPACITY,
             )
         }
     }
 
-    fun onSelectBrightnessTool() {
-        _uiState.update { it.copy(activeTool = ActiveTool.BRIGHTNESS) }
+    fun onSelectOpacityTool() {
+        _uiState.update { it.copy(activeTool = ActiveTool.OPACITY) }
     }
 
     fun onOutlineTabClick() {
@@ -135,6 +136,10 @@ class MainScreenViewModel : ViewModel() {
 
     fun onToggleGrid() {
         _uiState.update { it.copy(showGrid = !it.showGrid) }
+    }
+
+    fun onToggleTorch() {
+        _uiState.update { it.copy(isTorchEnabled = !it.isTorchEnabled) }
     }
 
     fun onSetLocked(locked: Boolean) {
