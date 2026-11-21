@@ -4,7 +4,14 @@
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.ar"
+        android:required="false" />
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <queries>
+        <package android:name="com.google.ar.core" />
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -14,6 +21,9 @@
         android:supportsRtl="true"
         android:windowSoftInputMode="adjustResize"
         android:theme="@style/Theme.DrawThrough">
+        <meta-data
+            android:name="com.google.ar.core"
+            android:value="optional" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -301,4 +301,78 @@ object DrawThroughIcons {
             }
         }.build()
     }
+
+    val ArSurface: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "ArSurface",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            // Isometric surface plane representing the paper/desk in 3D space
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(7.8f, 14.0f)
+                lineTo(3.5f, 16.2f)
+                lineTo(12f, 20.4f)
+                lineTo(20.5f, 16.2f)
+                lineTo(16.2f, 14.0f)
+            }
+            // Anchor pin pointing onto the center of the surface plane
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(12f, 15.0f)
+                curveTo(12f, 15.0f, 16.2f, 11.1f, 16.2f, 7.6f)
+                arcToRelative(4.2f, 4.2f, 0f, true, false, -8.4f, 0f)
+                curveTo(7.8f, 11.1f, 12f, 15.0f, 12f, 15.0f)
+                close()
+            }
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(12f, 7.6f)
+                moveToRelative(-1.35f, 0f)
+                arcToRelative(1.35f, 1.35f, 0f, true, true, 2.7f, 0f)
+                arcToRelative(1.35f, 1.35f, 0f, true, true, -2.7f, 0f)
+            }
+        }.build()
+    }
+
+    val Repin: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Repin",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(12f, 6.2f)
+                arcToRelative(5.8f, 5.8f, 0f, true, true, 0f, 11.6f)
+                arcToRelative(5.8f, 5.8f, 0f, true, true, 0f, -11.6f)
+                moveTo(12f, 3f); verticalLineTo(6.2f)
+                moveTo(12f, 17.8f); verticalLineTo(21f)
+                moveTo(3f, 12f); horizontalLineTo(6.2f)
+                moveTo(17.8f, 12f); horizontalLineTo(21f)
+            }
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(12f, 12f)
+                moveToRelative(-1.6f, 0f)
+                arcToRelative(1.6f, 1.6f, 0f, true, true, 3.2f, 0f)
+                arcToRelative(1.6f, 1.6f, 0f, true, true, -3.2f, 0f)
+            }
+        }.build()
+    }
 }

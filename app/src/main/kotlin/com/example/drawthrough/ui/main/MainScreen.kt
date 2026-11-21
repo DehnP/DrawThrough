@@ -28,6 +28,8 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -84,6 +86,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.drawthrough.R
+import com.example.drawthrough.ar.ArRenderParams
+import com.example.drawthrough.ar.ArSurfaceController
+import com.example.drawthrough.ar.ArSurfaceState
+import com.example.drawthrough.ar.ArSurfaceStatus
+import com.example.drawthrough.ui.components.ArSurfaceCameraLayer
 import com.example.drawthrough.ui.components.CameraFeedLayer
 import com.example.drawthrough.ui.components.DrawThroughIcons
 import com.example.drawthrough.ui.theme.DrawThroughTheme
@@ -141,6 +148,8 @@ fun MainScreen(
         )
     }
 
+    val arController = remember { ArSurfaceController() }
+
     // Keep screen awake while drawing over the camera feed
     KeepScreenAwakeEffect()
 
@@ -160,14 +169,44 @@ fun MainScreen(
         onOutlineStrengthChange = viewModel::onOutlineStrengthChange,
         onToggleGrid = viewModel::onToggleGrid,
         onToggleTorch = viewModel::onToggleTorch,
+        onToggleArLock = viewModel::onToggleArLock,
+        onArRepin = viewModel::onArRepin,
+        onArPlaneDrag = { prevX, prevY, currX, currY ->
+            arController.enqueuePlaneDrag(prevX, prevY, currX, currY)
+        },
+        onArTapToPin = { x, y ->
+            arController.requestAnchorAt(x, y)
+        },
         onSetLocked = viewModel::onSetLocked,
         onTransform = viewModel::onTransform,
         onResetTransform = viewModel::onResetTransform,
+        onDismissError = viewModel::onDismissError,
         cameraContent = {
-            CameraFeedLayer(
-                isTorchEnabled = uiState.isTorchEnabled,
-                modifier = Modifier.fillMaxSize(),
-            )
+            if (uiState.arLockEnabled) {
+                ArSurfaceCameraLayer(
+                    renderParams = ArRenderParams(
+                        bitmap = uiState.displayedBitmap,
+                        opacity = uiState.opacity,
+                        scale = uiState.scale,
+                        rotationDeg = uiState.rotation,
+                        showGrid = uiState.showGrid,
+                        isTorchEnabled = uiState.isTorchEnabled,
+                        isLocked = uiState.isLocked,
+                        anchorVersion = uiState.arAnchorVersion,
+                        resetVersion = uiState.transformResetVersion,
+                    ),
+                    controller = arController,
+                    onStatusChanged = viewModel::onArStatusChanged,
+                    onPlaneOffsetChanged = viewModel::onArPlaneOffsetChanged,
+                    onUnavailable = viewModel::onArUnavailable,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                CameraFeedLayer(
+                    isTorchEnabled = uiState.isTorchEnabled,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         },
         modifier = modifier,
     )
@@ -193,6 +232,7 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun DrawThroughContent(
     uiState: MainScreenUiState,
@@ -209,6 +249,11 @@ internal fun DrawThroughContent(
     onTransform: (zoom: Float, panX: Float, panY: Float, rotation: Float) -> Unit,
     onResetTransform: () -> Unit,
     modifier: Modifier = Modifier,
+    onToggleArLock: () -> Unit = {},
+    onArRepin: () -> Unit = {},
+    onArPlaneDrag: (prevX: Float, prevY: Float, currX: Float, currY: Float) -> Unit = { _, _, _, _ -> },
+    onArTapToPin: (x: Float, y: Float) -> Unit = { _, _ -> },
+    onDismissError: () -> Unit = {},
     cameraContent: (@Composable () -> Unit)? = null,
     previewOverlay: (@Composable () -> Unit)? = null,
 ) {
@@ -217,28 +262,30 @@ internal fun DrawThroughContent(
             .fillMaxSize()
             .background(StudioCanvas),
     ) {
-        // 1. Live rear camera feed showing the paper underneath
+        // 1. Live rear camera feed (CameraX 60fps or ARCore 3D surface-anchored OpenGL layer)
         if (hasCameraPermission && cameraContent != null) {
             cameraContent()
         }
 
-        // 2. Optional subtle dotted alignment grid
-        if (uiState.showGrid) {
+        // 2. Optional subtle dotted alignment grid (in AR mode, rendered in 3D on the paper plane)
+        if (uiState.showGrid && !(uiState.isArOverlayRendering && uiState.hasImage)) {
             DottedTracingGrid(modifier = Modifier.fillMaxSize())
         }
 
-        // 3. Translucent transformable image overlay (or permission / empty prompt)
+        // 3. Translucent transformable image overlay (or permission / empty prompt + AR gestures)
         TracingOverlayArea(
             uiState = uiState,
             hasCameraPermission = hasCameraPermission,
             onRequestCameraPermission = onRequestCameraPermission,
             onPickPhoto = onPickPhoto,
             onTransform = onTransform,
+            onArPlaneDrag = onArPlaneDrag,
+            onArTapToPin = onArTapToPin,
             previewOverlay = previewOverlay,
             modifier = Modifier.fillMaxSize(),
         )
 
-        // 4. Top bar (fades away cleanly when locked)
+        // 4. Top bar + contextual AR / reset chips (fades away cleanly when locked)
         AnimatedVisibility(
             visible = !uiState.isLocked,
             enter = fadeIn() + slideInVertically { -it },
@@ -254,9 +301,30 @@ internal fun DrawThroughContent(
                     onToggleTorch = onToggleTorch,
                     onPickPhoto = onPickPhoto,
                 )
-                if (uiState.isTransformed && uiState.hasImage) {
+                if (uiState.arLockEnabled) {
                     Spacer(modifier = Modifier.height(10.dp))
-                    ResetTransformChip(onClick = onResetTransform)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    ) {
+                        ArStatusChip(status = uiState.arStatus)
+                        if (uiState.arStatus.isActivelyAnchored) {
+                            RepinSurfaceChip(onClick = onArRepin)
+                        }
+                        if (uiState.isTransformed && uiState.hasImage) {
+                            ResetTransformChip(
+                                label = "Reset",
+                                onClick = onResetTransform,
+                            )
+                        }
+                    }
+                } else if (uiState.isTransformed && uiState.hasImage) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    ResetTransformChip(
+                        label = "Reset position",
+                        onClick = onResetTransform,
+                    )
                 }
             }
         }
@@ -269,7 +337,7 @@ internal fun DrawThroughContent(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .padding(horizontal = 16.dp, vertical = 16.dp),
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -283,15 +351,31 @@ internal fun DrawThroughContent(
                 StudioBottomDock(
                     activeTool = uiState.activeTool,
                     outlineEnabled = uiState.outlineEnabled,
+                    arLockEnabled = uiState.arLockEnabled,
                     onPhotoClick = onPickPhoto,
                     onOpacityClick = onSelectOpacity,
                     onOutlineClick = onOutlineClick,
+                    onArLockClick = onToggleArLock,
                     onLockClick = { onSetLocked(true) },
                 )
             }
         }
 
-        // 6. Locked-mode unobtrusive "Hold to unlock" pill
+        // 6. Locked-mode unobtrusive "Hold to unlock" pill (+ subtle tracking warning if AR pauses)
+        AnimatedVisibility(
+            visible = uiState.isLocked &&
+                uiState.arLockEnabled &&
+                uiState.arStatus.state == ArSurfaceState.TRACKING_LIMITED,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 12.dp, start = 20.dp, end = 20.dp),
+        ) {
+            ArStatusChip(status = uiState.arStatus)
+        }
+
         AnimatedVisibility(
             visible = uiState.isLocked,
             enter = fadeIn(),
@@ -331,7 +415,8 @@ internal fun DrawThroughContent(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
-                    .padding(top = 76.dp, start = 24.dp, end = 24.dp),
+                    .padding(top = 76.dp, start = 24.dp, end = 24.dp)
+                    .clickable(onClick = onDismissError),
             ) {
                 Text(
                     text = message,
@@ -385,13 +470,38 @@ private fun TracingOverlayArea(
     onRequestCameraPermission: () -> Unit,
     onPickPhoto: () -> Unit,
     onTransform: (zoom: Float, panX: Float, panY: Float, rotation: Float) -> Unit,
+    onArPlaneDrag: (prevX: Float, prevY: Float, currX: Float, currY: Float) -> Unit,
+    onArTapToPin: (x: Float, y: Float) -> Unit,
     previewOverlay: (@Composable () -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    val gestureModifier = if (!uiState.isLocked && uiState.hasImage) {
+    val transformModifier = if (!uiState.isLocked && uiState.hasImage) {
+        Modifier.pointerInput(uiState.arLockEnabled, uiState.isArOverlayRendering) {
+            detectTransformGestures { centroid, pan, zoom, rotation ->
+                if (uiState.arLockEnabled && uiState.isArOverlayRendering) {
+                    if (pan != Offset.Zero) {
+                        onArPlaneDrag(centroid.x - pan.x, centroid.y - pan.y, centroid.x, centroid.y)
+                    }
+                    if (zoom != 1f || rotation != 0f) {
+                        onTransform(zoom, 0f, 0f, rotation)
+                    }
+                } else {
+                    onTransform(zoom, pan.x, pan.y, rotation)
+                }
+            }
+        }
+    } else {
+        Modifier
+    }
+
+    val tapToPinModifier = if (
+        !uiState.isLocked &&
+        uiState.arLockEnabled &&
+        uiState.arStatus.state == ArSurfaceState.SEARCHING
+    ) {
         Modifier.pointerInput(Unit) {
-            detectTransformGestures { _, pan, zoom, rotation ->
-                onTransform(zoom, pan.x, pan.y, rotation)
+            detectTapGestures { offset ->
+                onArTapToPin(offset.x, offset.y)
             }
         }
     } else {
@@ -399,7 +509,9 @@ private fun TracingOverlayArea(
     }
 
     Box(
-        modifier = modifier.then(gestureModifier),
+        modifier = modifier
+            .then(transformModifier)
+            .then(tapToPinModifier),
         contentAlignment = Alignment.Center,
     ) {
         val bitmap = uiState.displayedBitmap
@@ -407,7 +519,8 @@ private fun TracingOverlayArea(
             !hasCameraPermission -> {
                 CameraPermissionCard(onRequestCameraPermission = onRequestCameraPermission)
             }
-            bitmap != null -> {
+            bitmap != null && !uiState.isArOverlayRendering -> {
+                // Rendered in 2D screen space when AR is off, or gently kept visible while AR scans
                 val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
                 Image(
                     bitmap = imageBitmap,
@@ -425,6 +538,9 @@ private fun TracingOverlayArea(
                             translationY = uiState.offsetY
                         },
                 )
+            }
+            bitmap != null && uiState.isArOverlayRendering -> {
+                // Image is rendered directly in 3D surface space by ArSurfaceCameraLayer
             }
             previewOverlay != null -> {
                 Box(
@@ -655,7 +771,10 @@ private fun StudioTopBar(
 }
 
 @Composable
-private fun ResetTransformChip(onClick: () -> Unit) {
+private fun ResetTransformChip(
+    label: String,
+    onClick: () -> Unit,
+) {
     Surface(
         onClick = onClick,
         shape = CircleShape,
@@ -675,7 +794,86 @@ private fun ResetTransformChip(onClick: () -> Unit) {
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = "Reset position",
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = StudioInk,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ArStatusChip(status: ArSurfaceStatus) {
+    val label = when (status.state) {
+        ArSurfaceState.INITIALIZING -> status.hint ?: "Starting AR…"
+        ArSurfaceState.SEARCHING -> status.hint ?: "Point at paper & move slightly"
+        ArSurfaceState.ANCHORED -> "Pinned to surface"
+        ArSurfaceState.TRACKING_LIMITED -> status.hint ?: "Tracking paused"
+        ArSurfaceState.UNAVAILABLE -> status.hint ?: "AR unavailable"
+        ArSurfaceState.INACTIVE -> ""
+    }
+    val dotColor = when (status.state) {
+        ArSurfaceState.ANCHORED -> Terracotta
+        ArSurfaceState.TRACKING_LIMITED -> Color(0xFFC27A2B)
+        else -> StudioInkMuted
+    }
+
+    Surface(
+        shape = CircleShape,
+        color = StudioPillSurface.copy(alpha = 0.94f),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (status.state == ArSurfaceState.ANCHORED) {
+                Terracotta.copy(alpha = 0.45f)
+            } else {
+                StudioBorder
+            },
+        ),
+        shadowElevation = 2.dp,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(dotColor),
+            )
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = StudioInk,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RepinSurfaceChip(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = StudioPillSurface.copy(alpha = 0.94f),
+        border = BorderStroke(1.dp, StudioBorder),
+        shadowElevation = 2.dp,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Icon(
+                imageVector = DrawThroughIcons.Repin,
+                contentDescription = null,
+                tint = Terracotta,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Re-pin",
                 style = MaterialTheme.typography.labelMedium,
                 color = StudioInk,
             )
@@ -746,9 +944,11 @@ private fun ContextualSliderPill(
 private fun StudioBottomDock(
     activeTool: ActiveTool,
     outlineEnabled: Boolean,
+    arLockEnabled: Boolean,
     onPhotoClick: () -> Unit,
     onOpacityClick: () -> Unit,
     onOutlineClick: () -> Unit,
+    onArLockClick: () -> Unit,
     onLockClick: () -> Unit,
 ) {
     Surface(
@@ -763,7 +963,7 @@ private fun StudioBottomDock(
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 8.dp),
         ) {
             DockActionItem(
                 icon = DrawThroughIcons.Photo,
@@ -788,6 +988,14 @@ private fun StudioBottomDock(
                 onClick = onOutlineClick,
                 modifier = Modifier.weight(1f),
             )
+            DockActionItem(
+                icon = DrawThroughIcons.ArSurface,
+                label = "AR Pin",
+                highlighted = arLockEnabled,
+                softCircle = true,
+                onClick = onArLockClick,
+                modifier = Modifier.weight(1f),
+            )
 
             Surface(
                 onClick = onLockClick,
@@ -800,7 +1008,7 @@ private fun StudioBottomDock(
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
-                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 8.dp),
+                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
                 ) {
                     Icon(
                         imageVector = DrawThroughIcons.Lock,
@@ -813,6 +1021,8 @@ private fun StudioBottomDock(
                         text = "Lock",
                         style = MaterialTheme.typography.labelMedium,
                         color = OnTerracotta,
+                        maxLines = 1,
+                        softWrap = false,
                     )
                 }
             }
@@ -863,6 +1073,8 @@ private fun DockActionItem(
             text = label,
             style = MaterialTheme.typography.labelMedium,
             color = contentColor,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
@@ -1037,6 +1249,51 @@ private fun DrawThroughLockedPreview() {
             onOutlineStrengthChange = {},
             onToggleGrid = {},
             onToggleTorch = {},
+            onSetLocked = {},
+            onTransform = { _, _, _, _ -> },
+            onResetTransform = {},
+            cameraContent = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFFEDE8DF)),
+                )
+            },
+            previewOverlay = {
+                Canvas(modifier = Modifier.size(240.dp)) {
+                    drawCircle(
+                        color = StudioInk,
+                        radius = size.minDimension * 0.28f,
+                        style = Stroke(width = 2.5.dp.toPx()),
+                    )
+                }
+            },
+        )
+    }
+}
+
+@Preview(showBackground = true, showSystemUi = true)
+@Composable
+private fun DrawThroughArPinnedPreview() {
+    DrawThroughTheme {
+        DrawThroughContent(
+            uiState = MainScreenUiState(
+                opacity = 0.55f,
+                arLockEnabled = true,
+                arStatus = ArSurfaceStatus(state = ArSurfaceState.ANCHORED),
+                arHasPlaneOffset = true,
+            ),
+            hasCameraPermission = true,
+            onRequestCameraPermission = {},
+            onPickPhoto = {},
+            onOpacityChange = {},
+            onSelectOpacity = {},
+            onOutlineClick = {},
+            onOutlineStrengthChange = {},
+            onToggleGrid = {},
+            onToggleTorch = {},
+            onToggleArLock = {},
+            onArRepin = {},
             onSetLocked = {},
             onTransform = { _, _, _, _ -> },
             onResetTransform = {},

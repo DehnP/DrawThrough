@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.drawthrough.ar.ArSurfaceState
+import com.example.drawthrough.ar.ArSurfaceStatus
 import com.example.drawthrough.image.TraceImageProcessor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -36,12 +38,19 @@ data class MainScreenUiState(
     val rotation: Float = 0f,
     val offsetX: Float = 0f,
     val offsetY: Float = 0f,
+    val arLockEnabled: Boolean = false,
+    val arStatus: ArSurfaceStatus = ArSurfaceStatus(),
+    val arHasPlaneOffset: Boolean = false,
+    val arAnchorVersion: Int = 0,
+    val transformResetVersion: Int = 0,
 ) {
     val hasImage: Boolean get() = originalBitmap != null
     val displayedBitmap: Bitmap?
         get() = if (outlineEnabled && outlineBitmap != null) outlineBitmap else originalBitmap
     val isTransformed: Boolean
-        get() = scale != 1f || rotation != 0f || offsetX != 0f || offsetY != 0f
+        get() = scale != 1f || rotation != 0f || offsetX != 0f || offsetY != 0f || arHasPlaneOffset
+    val isArOverlayRendering: Boolean
+        get() = arLockEnabled && arStatus.isActivelyAnchored
 }
 
 class MainScreenViewModel : ViewModel() {
@@ -70,6 +79,8 @@ class MainScreenViewModel : ViewModel() {
                         rotation = 0f,
                         offsetX = 0f,
                         offsetY = 0f,
+                        arHasPlaneOffset = false,
+                        transformResetVersion = it.transformResetVersion + 1,
                         isLocked = false,
                     )
                 }
@@ -160,8 +171,82 @@ class MainScreenViewModel : ViewModel() {
 
     fun onResetTransform() {
         _uiState.update {
-            it.copy(scale = 1f, rotation = 0f, offsetX = 0f, offsetY = 0f)
+            it.copy(
+                scale = 1f,
+                rotation = 0f,
+                offsetX = 0f,
+                offsetY = 0f,
+                arHasPlaneOffset = false,
+                transformResetVersion = it.transformResetVersion + 1,
+            )
         }
+    }
+
+    fun onToggleArLock() {
+        _uiState.update { state ->
+            if (state.arLockEnabled) {
+                state.copy(
+                    arLockEnabled = false,
+                    arStatus = ArSurfaceStatus(ArSurfaceState.INACTIVE),
+                    arHasPlaneOffset = false,
+                )
+            } else {
+                state.copy(
+                    arLockEnabled = true,
+                    arStatus = ArSurfaceStatus(ArSurfaceState.INITIALIZING, "Starting AR…"),
+                    arHasPlaneOffset = false,
+                    errorMessage = null,
+                )
+            }
+        }
+    }
+
+    fun onArStatusChanged(status: ArSurfaceStatus) {
+        _uiState.update { state ->
+            if (!state.arLockEnabled) {
+                state
+            } else {
+                state.copy(arStatus = status)
+            }
+        }
+    }
+
+    fun onArUnavailable(message: String) {
+        _uiState.update { state ->
+            state.copy(
+                arLockEnabled = false,
+                arStatus = ArSurfaceStatus(ArSurfaceState.INACTIVE),
+                arHasPlaneOffset = false,
+                errorMessage = message,
+            )
+        }
+    }
+
+    fun onArRepin() {
+        _uiState.update { state ->
+            if (!state.arLockEnabled || state.isLocked) {
+                state
+            } else {
+                state.copy(
+                    arAnchorVersion = state.arAnchorVersion + 1,
+                    arHasPlaneOffset = false,
+                    arStatus = ArSurfaceStatus(
+                        state = ArSurfaceState.SEARCHING,
+                        hint = "Point at paper & move slightly",
+                    ),
+                )
+            }
+        }
+    }
+
+    fun onArPlaneOffsetChanged(hasOffset: Boolean) {
+        _uiState.update { state ->
+            if (!state.arLockEnabled) state else state.copy(arHasPlaneOffset = hasOffset)
+        }
+    }
+
+    fun onDismissError() {
+        _uiState.update { it.copy(errorMessage = null) }
     }
 
     private fun regenerateOutline(source: Bitmap, strength: Float, debounceMs: Long) {
